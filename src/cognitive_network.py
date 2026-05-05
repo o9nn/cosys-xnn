@@ -15,8 +15,10 @@ import asyncio
 import numpy as np
 from typing import Optional, Dict, Any, List
 
-# ── cosmos_core: use local stub, fall back to shared-lib env var ──────────────
-sys.path.insert(0, os.path.dirname(__file__))
+# ── cosmos_core: use local stub (src/cosmos_core/), or override via
+#    COSMOS_LIB_PATH env var to point at an external shared-lib installation ──
+_cosmos_path = os.environ.get("COSMOS_LIB_PATH", os.path.dirname(__file__))
+sys.path.insert(0, _cosmos_path)
 from cosmos_core import (
     BaseCosmosService, ServiceConfig, ServiceMessage,
     Triad, Polarity, ServicePosition, Dimension,
@@ -242,23 +244,30 @@ class CognitiveNeuralSystem:
                     "neuron_type": svc.population.neuron_type.value,
                 }
             elif hasattr(svc, "bla"):  # Amygdala
+                bla_rate = svc.bla.get_firing_rate()
+                cea_rate = svc.cea.get_firing_rate()
                 state[key] = {
-                    "bla_rate": svc.bla.get_firing_rate(),
-                    "cea_rate": svc.cea.get_firing_rate(),
-                    "firing_rate": (svc.bla.get_firing_rate() + svc.cea.get_firing_rate()) / 2,
+                    "bla_rate": bla_rate,
+                    "cea_rate": cea_rate,
+                    "firing_rate": (bla_rate + cea_rate) / 2,
                 }
             elif hasattr(svc, "pag"):  # Brainstem
+                pag_rate = svc.pag.get_firing_rate()
+                lc_rate  = svc.lc.get_firing_rate()
+                nts_rate = svc.nts.get_firing_rate()
                 state[key] = {
-                    "pag_rate": svc.pag.get_firing_rate(),
-                    "lc_rate":  svc.lc.get_firing_rate(),
-                    "nts_rate": svc.nts.get_firing_rate(),
-                    "firing_rate": svc.lc.get_firing_rate(),
+                    "pag_rate": pag_rate,
+                    "lc_rate":  lc_rate,
+                    "nts_rate": nts_rate,
+                    "firing_rate": lc_rate,
                 }
             elif hasattr(svc, "anterior"):  # Insula
+                anterior_rate = svc.anterior.get_firing_rate()
+                posterior_rate = svc.posterior.get_firing_rate()
                 state[key] = {
-                    "anterior_rate": svc.anterior.get_firing_rate(),
-                    "posterior_rate": svc.posterior.get_firing_rate(),
-                    "firing_rate": (svc.anterior.get_firing_rate() + svc.posterior.get_firing_rate()) / 2,
+                    "anterior_rate": anterior_rate,
+                    "posterior_rate": posterior_rate,
+                    "firing_rate": (anterior_rate + posterior_rate) / 2,
                 }
         return state
 

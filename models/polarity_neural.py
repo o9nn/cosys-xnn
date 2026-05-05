@@ -7,15 +7,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Dict
 
-try:
-    from cosmos_core import Polarity
-except ImportError:
-    from enum import Enum
-
-    class Polarity(Enum):  # type: ignore[no-redef]
-        SYMPATHETIC = "sympathetic"
-        PARASYMPATHETIC = "parasympathetic"
-        SOMATIC = "somatic"
+from cosmos_core import Polarity
 
 # Frequency band descriptions
 POLARITY_BANDS = {

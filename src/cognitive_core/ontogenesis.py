@@ -86,9 +86,13 @@ class OntogenesisEngine:
             per_gene = total // len(genome.genes)
             for i, gene in enumerate(genome.genes):
                 chunk = evolved[i * per_gene : (i + 1) * per_gene]
+                n = len(gene.weights)
+                # Pad chunk if shorter than gene.weights due to uneven division
+                if len(chunk) < n:
+                    chunk = np.concatenate([chunk, np.zeros(n - len(chunk))])
                 gene.weights = (
                     (1 - genome.plasticity) * gene.weights
-                    + genome.plasticity * chunk[: len(gene.weights)]
+                    + genome.plasticity * chunk[:n]
                 )
 
     def select_and_reproduce(self) -> None:

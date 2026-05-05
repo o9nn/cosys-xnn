@@ -45,5 +45,5 @@ class CrossFrequencyCoupling:
             return 0.0
         p = mean_amp / mean_amp.sum()
         q = np.ones(n_bins) / n_bins
-        kl_div = np.sum(p * np.log(p / q + 1e-10))
+        kl_div = np.sum(p * np.log((p + 1e-10) / q))
         return kl_div / np.log(n_bins)
