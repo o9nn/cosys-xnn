@@ -1,6 +1,7 @@
 """Async event bus with neural pathway constraints and timing simulation."""
 
 import asyncio
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
@@ -51,8 +52,6 @@ class EventBus:
             self._event_log.pop(0)
 
         if self.simulate_timing:
-            import random
-
             timing_key = PATHWAY_TIMING.get(event.pathway, "local")
             lo, hi = TIMING_MS[timing_key]
             delay_ms = random.uniform(lo, hi)

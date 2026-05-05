@@ -3,7 +3,7 @@ NeuralSystem5StateMachine — 60-step deterministic cycle.
 LCM(3, 20) = 60 steps for full Universal-Particular synchronization.
 """
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Neural correlate timing constants (ms)
 TIMING = {
@@ -99,6 +99,6 @@ class NeuralSystem5StateMachine:
     def get_active_universal(self) -> UniversalState:
         return self._universals[self.t % 3]
 
-    def get_active_particular(self):
+    def get_active_particular(self) -> Optional[ParticularState]:
         p_idx = self.t % 5
         return self._particulars[p_idx] if p_idx < 4 else None

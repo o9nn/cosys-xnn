@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import numpy as np
+from scipy.stats import norm
 from typing import Any, Dict
 
 from cosmos_core import create_message
@@ -171,8 +172,6 @@ async def morris_maze_task(system: Any, n_trials: int = 10) -> Dict[str, Any]:
 
 
 def _d_prime(hit_rate: float, fa_rate: float) -> float:
-    from scipy.stats import norm
-
     hr = np.clip(hit_rate, 0.01, 0.99)
     fa = np.clip(fa_rate, 0.01, 0.99)
     return float(norm.ppf(hr) - norm.ppf(fa))

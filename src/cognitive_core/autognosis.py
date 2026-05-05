@@ -1,5 +1,6 @@
 """Autognosis: hierarchical self-awareness and self-optimization."""
 
+import time
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
@@ -10,9 +11,7 @@ class SelfImage:
     level: str
     metrics: Dict[str, float]
     confidence: float
-    timestamp: float = field(
-        default_factory=lambda: __import__("time").time()
-    )
+    timestamp: float = field(default_factory=time.time)
 
 
 @dataclass
