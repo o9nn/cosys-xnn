@@ -6,6 +6,9 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build / Python ${{ matrix.python-version }}
