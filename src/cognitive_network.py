@@ -1,761 +1,337 @@
 """
-COSYS-XNN: Cognitive Neural Network Implementation
-===================================================
+COSYS-XNN: Cognitive Neural Network — Unified Orchestrator
+==========================================================
 
 Cosmos System 5 model applied to cognitive function, brain regions, and neural networks.
-
-This module implements the triadic cognitive architecture:
-- Cerebral Triad: Neocortex executive functions (prefrontal, parietal, motor cortex)
-- Somatic Triad: Basal ganglia motor control (striatum, thalamus, globus pallidus)
-- Autonomic Triad: Limbic system regulation (hypothalamus, hippocampus, amygdala)
+Implements the complete 18-service [[D-T]-[P-O]-[S-M]] pattern across three triads.
 
 Author: Cosmos System Enhancement Project
-Date: December 29, 2025
 License: AGPL-3.0
 """
 
-import numpy as np
-from typing import Optional, Dict, Any, List, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
+import os
 import sys
-sys.path.append('/home/ubuntu/cosys-enhancement/shared-cosmos-lib')
+import asyncio
+import numpy as np
+from typing import Optional, Dict, Any, List
+
+# ── cosmos_core: use local stub (src/cosmos_core/), or override via
+#    COSMOS_LIB_PATH env var to point at an external shared-lib installation ──
+_cosmos_path = os.environ.get("COSMOS_LIB_PATH", os.path.dirname(__file__))
+sys.path.insert(0, _cosmos_path)
 from cosmos_core import (
     BaseCosmosService, ServiceConfig, ServiceMessage,
     Triad, Polarity, ServicePosition, Dimension,
-    TriadicCoordinator, create_message, setup_logging
+    TriadicCoordinator, create_message, setup_logging,
 )
 
+# ── Cerebral Triad ────────────────────────────────────────────────────────────
+from cerebral_triad.prefrontal_cortex  import PrefrontalCortexService
+from cerebral_triad.anterior_cingulate import AnteriorCingulateService
+from cerebral_triad.parietal_cortex    import ParietalCortexService
+from cerebral_triad.motor_cortex       import MotorCortexService
 
-# ============================================================================
-# NEURAL MODELS
-# ============================================================================
+# ── Somatic Triad ─────────────────────────────────────────────────────────────
+from somatic_triad.striatum        import StriatumService
+from somatic_triad.thalamus        import ThalamusService
+from somatic_triad.caudate_nucleus import CaudateNucleusService
+from somatic_triad.putamen         import PutamenService
+from somatic_triad.globus_pallidus import GlobusPallidusService
+from somatic_triad.substantia_nigra import SubstantiaNigraService
 
-class NeuronType(Enum):
-    """Types of neurons with different dynamics."""
-    EXCITATORY = "excitatory"      # Glutamatergic
-    INHIBITORY = "inhibitory"      # GABAergic
-    MODULATORY = "modulatory"      # Dopaminergic, etc.
+# ── Autonomic Triad ───────────────────────────────────────────────────────────
+from autonomic_triad.hypothalamus      import HypothalamusService
+from autonomic_triad.hippocampus       import HippocampusService
+from autonomic_triad.amygdala          import AmygdalaService
+from autonomic_triad.brainstem         import BrainstemService
+from autonomic_triad.insula            import InsulaService
+from autonomic_triad.cingulate_autonomic import CingulateAutonomicService
 
+# ── Integration Hub ───────────────────────────────────────────────────────────
+from integration_hub.global_workspace import GlobalWorkspace, Representation
+from integration_hub.event_bus        import EventBus
+from integration_hub.triple_network   import TripleNetworkModel
 
-@dataclass
-class LeakyIntegrateFireNeuron:
-    """
-    Leaky Integrate-and-Fire (LIF) neuron model.
-    
-    Membrane potential dynamics:
-    τ dV/dt = -(V - V_rest) + R·I
-    
-    When V ≥ V_threshold, neuron fires and V resets to V_reset.
-    """
-    # Parameters
-    tau: float = 20.0           # Membrane time constant (ms)
-    v_rest: float = -70.0       # Resting potential (mV)
-    v_reset: float = -75.0      # Reset potential (mV)
-    v_threshold: float = -50.0  # Spike threshold (mV)
-    resistance: float = 10.0    # Membrane resistance (MΩ)
-    
-    # State
-    v: float = field(default=-70.0)  # Current membrane potential
-    spike: bool = field(default=False)
-    
-    def step(self, input_current: float, dt: float = 1.0) -> bool:
-        """
-        Update neuron state for one time step.
-        
-        Args:
-            input_current: Input current (nA)
-            dt: Time step (ms)
-        
-        Returns:
-            True if neuron spiked, False otherwise
-        """
-        # Euler integration
-        dv = (-(self.v - self.v_rest) + self.resistance * input_current) / self.tau
-        self.v += dv * dt
-        
-        # Check for spike
-        if self.v >= self.v_threshold:
-            self.v = self.v_reset
-            self.spike = True
-            return True
-        
-        self.spike = False
-        return False
+# ── Cognitive Core ────────────────────────────────────────────────────────────
+from cognitive_core.autognosis import AutognosisOrchestrator
+
+# ── Models ────────────────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "models"))
+from system5_neural import NeuralSystem5StateMachine
 
 
-@dataclass
-class NeuralPopulation:
-    """
-    Population of neurons representing a brain region.
-    """
-    name: str
-    n_neurons: int
-    neuron_type: NeuronType
-    neurons: List[LeakyIntegrateFireNeuron] = field(default_factory=list)
-    
-    def __post_init__(self):
-        """Initialize neurons."""
-        self.neurons = [LeakyIntegrateFireNeuron() for _ in range(self.n_neurons)]
-        self.activity = np.zeros(self.n_neurons)
-    
-    def step(self, input_currents: np.ndarray, dt: float = 1.0) -> np.ndarray:
-        """
-        Update all neurons in the population.
-        
-        Args:
-            input_currents: (n_neurons,) array of input currents
-            dt: Time step (ms)
-        
-        Returns:
-            (n_neurons,) array of spike indicators (0 or 1)
-        """
-        spikes = np.zeros(self.n_neurons)
-        for i, neuron in enumerate(self.neurons):
-            spikes[i] = float(neuron.step(input_currents[i], dt))
-        
-        # Update population activity (exponential moving average)
-        self.activity = 0.9 * self.activity + 0.1 * spikes
-        return spikes
-    
-    def get_firing_rate(self) -> float:
-        """Get population firing rate."""
-        return np.mean(self.activity)
-
-
-# ============================================================================
-# CEREBRAL TRIAD: NEOCORTEX EXECUTIVE FUNCTIONS
-# ============================================================================
-
-class PrefrontalCortexService(BaseCosmosService):
-    """
-    T-7: Right Prefrontal Cortex
-    Creative ideation, divergent thinking, pattern recognition.
-    
-    Brodmann Areas: 9, 10, 46
-    Neurotransmitters: Dopamine, Norepinephrine
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 100):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Prefrontal Cortex",
-            n_neurons,
-            NeuronType.EXCITATORY
-        )
-        self.idea_buffer = []
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Prefrontal Cortex Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        if message.type in ['SENSORY_INPUT', 'RELAYED_SENSORY']:
-            # Generate creative ideas from sensory input
-            sensory_data = message.payload
-            
-            # Simulate neural activity
-            input_currents = np.random.randn(self.population.n_neurons) * 5.0
-            spikes = self.population.step(input_currents)
-            
-            # Generate ideas based on firing rate
-            firing_rate = self.population.get_firing_rate()
-            
-            ideas = {
-                'firing_rate': firing_rate,
-                'active_neurons': int(np.sum(spikes)),
-                'idea_strength': firing_rate * 10,
-                'context': sensory_data.get('context', 'unknown')
-            }
-            
-            return create_message(
-                'CREATIVE_IDEAS',
-                ideas,
-                self.config.service_name,
-                'cerebral:PD-2'
-            )
-        return None
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Prefrontal Cortex Service shutdown')
-
-
-class AnteriorCingulateService(BaseCosmosService):
-    """
-    PD-2: Anterior Cingulate Cortex
-    Conflict monitoring, attention control, executive coordination.
-    
-    Brodmann Areas: 24, 32, 33
-    Neurotransmitters: Glutamate, GABA
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 80):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Anterior Cingulate",
-            n_neurons,
-            NeuronType.EXCITATORY
-        )
-        self.conflict_threshold = 0.5
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Anterior Cingulate Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        if message.type == 'CREATIVE_IDEAS':
-            ideas = message.payload
-            
-            # Simulate conflict detection
-            input_currents = np.random.randn(self.population.n_neurons) * 3.0
-            spikes = self.population.step(input_currents)
-            
-            firing_rate = self.population.get_firing_rate()
-            conflict_detected = firing_rate > self.conflict_threshold
-            
-            coordination = {
-                'conflict_level': firing_rate,
-                'attention_allocated': firing_rate * 100,
-                'executive_control': 'high' if conflict_detected else 'low',
-                'ideas_processed': ideas
-            }
-            
-            return create_message(
-                'EXECUTIVE_COORDINATION',
-                coordination,
-                self.config.service_name,
-                'cerebral:P-5'
-            )
-        return None
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Anterior Cingulate Service shutdown')
-
-
-class ParietalCortexService(BaseCosmosService):
-    """
-    P-5: Parietal Cortex
-    Analytical processing, spatial reasoning, mathematical processing.
-    
-    Brodmann Areas: 5, 7, 39, 40
-    Neurotransmitters: Glutamate
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 120):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Parietal Cortex",
-            n_neurons,
-            NeuronType.EXCITATORY
-        )
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Parietal Cortex Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        if message.type == 'EXECUTIVE_COORDINATION':
-            coordination = message.payload
-            
-            # Analytical processing
-            input_currents = np.random.randn(self.population.n_neurons) * 4.0
-            spikes = self.population.step(input_currents)
-            
-            firing_rate = self.population.get_firing_rate()
-            
-            analysis = {
-                'analytical_depth': firing_rate * 10,
-                'spatial_reasoning': firing_rate * 8,
-                'processed_coordination': coordination,
-                'ready_for_output': firing_rate > 0.3
-            }
-            
-            return create_message(
-                'ANALYTICAL_RESULT',
-                analysis,
-                self.config.service_name,
-                'cerebral:O-4'
-            )
-        return None
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Parietal Cortex Service shutdown')
-
-
-class MotorCortexService(BaseCosmosService):
-    """
-    O-4: Motor Cortex
-    Action planning, motor sequencing, formatted output.
-    
-    Brodmann Areas: 4, 6
-    Neurotransmitters: Glutamate, Acetylcholine
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 100):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Motor Cortex",
-            n_neurons,
-            NeuronType.EXCITATORY
-        )
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Motor Cortex Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        if message.type == 'ANALYTICAL_RESULT':
-            analysis = message.payload
-            
-            # Generate motor plan
-            input_currents = np.random.randn(self.population.n_neurons) * 4.5
-            spikes = self.population.step(input_currents)
-            
-            firing_rate = self.population.get_firing_rate()
-            
-            motor_plan = {
-                'action_strength': firing_rate * 10,
-                'motor_sequence': list(spikes[:10]),  # First 10 neurons
-                'execution_ready': firing_rate > 0.4,
-                'analysis_basis': analysis
-            }
-            
-            return create_message(
-                'MOTOR_OUTPUT',
-                motor_plan,
-                self.config.service_name
-            )
-        return None
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Motor Cortex Service shutdown')
-
-
-# ============================================================================
-# SOMATIC TRIAD: BASAL GANGLIA MOTOR CONTROL
-# ============================================================================
-
-class StriatumService(BaseCosmosService):
-    """
-    M-1: Striatum (Caudate, Putamen)
-    Action selection, habit formation.
-    
-    Neurotransmitters: GABA, Dopamine receptors
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 150):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Striatum",
-            n_neurons,
-            NeuronType.INHIBITORY
-        )
-        self.action_values = {}
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Striatum Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        if message.type == 'MOTOR_OUTPUT':
-            motor_plan = message.payload
-            
-            # Action selection
-            input_currents = np.random.randn(self.population.n_neurons) * 3.5
-            spikes = self.population.step(input_currents)
-            
-            firing_rate = self.population.get_firing_rate()
-            
-            action_selection = {
-                'selected_action': 'execute' if firing_rate > 0.3 else 'inhibit',
-                'action_value': firing_rate * 10,
-                'habit_strength': firing_rate * 5,
-                'motor_plan': motor_plan
-            }
-            
-            return create_message(
-                'ACTION_SELECTED',
-                action_selection,
-                self.config.service_name
-            )
-        return None
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Striatum Service shutdown')
-
-
-class ThalamusService(BaseCosmosService):
-    """
-    S-8: Thalamus (VL, VA, MD nuclei)
-    Sensory relay, motor gating.
-    
-    Neurotransmitters: Glutamate
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 100):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Thalamus",
-            n_neurons,
-            NeuronType.EXCITATORY
-        )
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Thalamus Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        if message.type == 'SENSORY_INPUT':
-            # Relay sensory information
-            sensory_data = message.payload
-            
-            input_currents = np.random.randn(self.population.n_neurons) * 4.0
-            spikes = self.population.step(input_currents)
-            
-            firing_rate = self.population.get_firing_rate()
-            
-            relayed_info = {
-                'relay_strength': firing_rate * 10,
-                'gating_active': firing_rate > 0.4,
-                'sensory_data': sensory_data
-            }
-            
-            return create_message(
-                'RELAYED_SENSORY',
-                relayed_info,
-                self.config.service_name,
-                'cerebral:T-7'
-            )
-        return None
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Thalamus Service shutdown')
-
-
-# ============================================================================
-# AUTONOMIC TRIAD: LIMBIC SYSTEM REGULATION
-# ============================================================================
-
-class HypothalamusService(BaseCosmosService):
-    """
-    M-1: Hypothalamus (PVN, LH, VMH)
-    Homeostatic monitoring, autonomic control.
-    
-    Neurotransmitters: Multiple peptides
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 60):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Hypothalamus",
-            n_neurons,
-            NeuronType.MODULATORY
-        )
-        self.homeostatic_setpoints = {
-            'arousal': 0.5,
-            'stress': 0.3,
-            'energy': 0.7
-        }
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Hypothalamus Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        # Monitor system state
-        input_currents = np.random.randn(self.population.n_neurons) * 2.0
-        spikes = self.population.step(input_currents)
-        
-        firing_rate = self.population.get_firing_rate()
-        
-        homeostatic_state = {
-            'arousal_level': firing_rate,
-            'stress_level': max(0, firing_rate - 0.5),
-            'energy_level': 1.0 - firing_rate,
-            'autonomic_balance': 'sympathetic' if firing_rate > 0.5 else 'parasympathetic'
-        }
-        
-        return create_message(
-            'HOMEOSTATIC_STATE',
-            homeostatic_state,
-            self.config.service_name
-        )
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Hypothalamus Service shutdown')
-
-
-class HippocampusService(BaseCosmosService):
-    """
-    S-8: Hippocampus (CA1, CA3, DG)
-    Episodic memory, spatial context.
-    
-    Neurotransmitters: Glutamate, Acetylcholine
-    """
-    
-    def __init__(self, config: ServiceConfig, n_neurons: int = 200):
-        super().__init__(config)
-        self.population = NeuralPopulation(
-            "Hippocampus",
-            n_neurons,
-            NeuronType.EXCITATORY
-        )
-        self.memory_buffer = []
-        self.max_memories = 100
-        
-    async def initialize(self) -> None:
-        self.log('info', 'Hippocampus Service initialized')
-        self.initialized = True
-        
-    async def process(self, message: ServiceMessage) -> Optional[ServiceMessage]:
-        # Store and retrieve memories
-        input_currents = np.random.randn(self.population.n_neurons) * 3.0
-        spikes = self.population.step(input_currents)
-        
-        firing_rate = self.population.get_firing_rate()
-        
-        # Store message in memory
-        self.memory_buffer.append({
-            'timestamp': message.timestamp,
-            'type': message.type,
-            'firing_rate': firing_rate
-        })
-        
-        if len(self.memory_buffer) > self.max_memories:
-            self.memory_buffer.pop(0)
-        
-        memory_state = {
-            'memory_strength': firing_rate * 10,
-            'context_richness': len(self.memory_buffer),
-            'recent_memories': self.memory_buffer[-5:]
-        }
-        
-        return create_message(
-            'MEMORY_STATE',
-            memory_state,
-            self.config.service_name
-        )
-    
-    async def shutdown(self) -> None:
-        self.log('info', 'Hippocampus Service shutdown')
-
-
-# ============================================================================
-# COGNITIVE SYSTEM
-# ============================================================================
+# =============================================================================
+# COGNITIVE NEURAL SYSTEM
+# =============================================================================
 
 class CognitiveNeuralSystem:
     """
     Complete Cosmos System 5 Cognitive Neural Network.
-    
-    Integrates all three triads:
-    - Cerebral: Neocortex executive functions
-    - Somatic: Basal ganglia motor control
-    - Autonomic: Limbic system regulation
+
+    Integrates all 18 services across three triads:
+      Cerebral  [4]: PFC (T-7), ACC (PD-2), Parietal (P-5), Motor (O-4)
+      Somatic   [6]: Striatum (M-1), Thalamus (S-8), Caudate (PD-2),
+                     Putamen (T-7), GlobusPallidus (P-5), SubstantiaNigra (O-4)
+      Autonomic [6]: Hypothalamus (M-1), Hippocampus (S-8), Amygdala (PD-2),
+                     Brainstem (T-7), Insula (P-5), CingulateAutonomic (O-4)
     """
-    
+
     def __init__(self):
-        self.coordinator = TriadicCoordinator()
-        self.services = {}
-        
-    async def initialize(self):
-        """Initialize all brain region services."""
-        # Cerebral Triad
-        pfc = PrefrontalCortexService(
-            ServiceConfig(
-                "prefrontal-cortex",
-                Triad.CEREBRAL,
-                ServicePosition.T7,
-                Polarity.SYMPATHETIC,
-                Dimension.POTENTIAL
-            )
-        )
-        await pfc.initialize()
-        self.coordinator.register_service(pfc)
-        self.services['pfc'] = pfc
-        
-        acc = AnteriorCingulateService(
-            ServiceConfig(
-                "anterior-cingulate",
-                Triad.CEREBRAL,
-                ServicePosition.PD2,
-                Polarity.PARASYMPATHETIC,
-                Dimension.POTENTIAL
-            )
-        )
-        await acc.initialize()
-        self.coordinator.register_service(acc)
-        self.services['acc'] = acc
-        
-        parietal = ParietalCortexService(
-            ServiceConfig(
-                "parietal-cortex",
-                Triad.CEREBRAL,
-                ServicePosition.P5,
-                Polarity.SOMATIC,
-                Dimension.COMMITMENT
-            )
-        )
-        await parietal.initialize()
-        self.coordinator.register_service(parietal)
-        self.services['parietal'] = parietal
-        
-        motor = MotorCortexService(
-            ServiceConfig(
-                "motor-cortex",
-                Triad.CEREBRAL,
-                ServicePosition.O4,
-                Polarity.SOMATIC,
-                Dimension.COMMITMENT
-            )
-        )
-        await motor.initialize()
-        self.coordinator.register_service(motor)
-        self.services['motor'] = motor
-        
-        # Somatic Triad
-        striatum = StriatumService(
-            ServiceConfig(
-                "striatum",
-                Triad.SOMATIC,
-                ServicePosition.M1,
-                Polarity.SYMPATHETIC,
-                Dimension.PERFORMANCE
-            )
-        )
-        await striatum.initialize()
-        self.coordinator.register_service(striatum)
-        self.services['striatum'] = striatum
-        
-        thalamus = ThalamusService(
-            ServiceConfig(
-                "thalamus",
-                Triad.SOMATIC,
-                ServicePosition.S8,
-                Polarity.SOMATIC,
-                Dimension.PERFORMANCE
-            )
-        )
-        await thalamus.initialize()
-        self.coordinator.register_service(thalamus)
-        self.services['thalamus'] = thalamus
-        
-        # Autonomic Triad
-        hypothalamus = HypothalamusService(
-            ServiceConfig(
-                "hypothalamus",
-                Triad.AUTONOMIC,
-                ServicePosition.M1,
-                Polarity.PARASYMPATHETIC,
-                Dimension.PERFORMANCE
-            )
-        )
-        await hypothalamus.initialize()
-        self.coordinator.register_service(hypothalamus)
-        self.services['hypothalamus'] = hypothalamus
-        
-        hippocampus = HippocampusService(
-            ServiceConfig(
-                "hippocampus",
-                Triad.AUTONOMIC,
-                ServicePosition.S8,
-                Polarity.PARASYMPATHETIC,
-                Dimension.PERFORMANCE
-            )
-        )
-        await hippocampus.initialize()
-        self.coordinator.register_service(hippocampus)
-        self.services['hippocampus'] = hippocampus
-        
-        print("✓ Cognitive Neural System initialized")
-        print(f"  - Cerebral Triad: {len([s for s in self.services.values() if s.config.triad == Triad.CEREBRAL])} regions")
-        print(f"  - Somatic Triad: {len([s for s in self.services.values() if s.config.triad == Triad.SOMATIC])} regions")
-        print(f"  - Autonomic Triad: {len([s for s in self.services.values() if s.config.triad == Triad.AUTONOMIC])} regions")
-    
+        self.coordinator   = TriadicCoordinator()
+        self.services: Dict[str, BaseCosmosService] = {}
+        self.state_machine = NeuralSystem5StateMachine()
+        self.global_workspace = GlobalWorkspace(ignition_threshold=0.7)
+        self.event_bus     = EventBus()
+        self.triple_network = TripleNetworkModel()
+        self.autognosis    = AutognosisOrchestrator()
+
+    # ── Initialisation ────────────────────────────────────────────────────────
+
+    async def initialize(self) -> None:
+        """Initialise and register all 18 brain-region services."""
+        await self._init_cerebral_triad()
+        await self._init_somatic_triad()
+        await self._init_autonomic_triad()
+
+        for name in self.services:
+            self.global_workspace.register_service(name)
+
+        print("✓ CognitiveNeuralSystem initialised")
+        print(f"  Cerebral  triad: {len(self.get_triad_services(Triad.CEREBRAL))} services")
+        print(f"  Somatic   triad: {len(self.get_triad_services(Triad.SOMATIC))} services")
+        print(f"  Autonomic triad: {len(self.get_triad_services(Triad.AUTONOMIC))} services")
+        print(f"  Total services : {len(self.services)}")
+
+    async def _init_cerebral_triad(self) -> None:
+        specs = [
+            ("pfc",      PrefrontalCortexService,  ServicePosition.T7,  Polarity.SYMPATHETIC,     Dimension.POTENTIAL),
+            ("acc",      AnteriorCingulateService,  ServicePosition.PD2, Polarity.PARASYMPATHETIC, Dimension.POTENTIAL),
+            ("parietal", ParietalCortexService,     ServicePosition.P5,  Polarity.SOMATIC,         Dimension.COMMITMENT),
+            ("motor",    MotorCortexService,         ServicePosition.O4,  Polarity.SOMATIC,         Dimension.COMMITMENT),
+        ]
+        for key, cls, pos, pol, dim in specs:
+            svc = cls(ServiceConfig(key, Triad.CEREBRAL, pos, pol, dim))
+            await svc.initialize()
+            self.coordinator.register_service(svc)
+            self.services[key] = svc
+
+    async def _init_somatic_triad(self) -> None:
+        specs = [
+            ("striatum",         StriatumService,        ServicePosition.M1,  Polarity.SYMPATHETIC,     Dimension.PERFORMANCE),
+            ("thalamus",         ThalamusService,         ServicePosition.S8,  Polarity.SOMATIC,         Dimension.PERFORMANCE),
+            ("caudate",          CaudateNucleusService,   ServicePosition.PD2, Polarity.PARASYMPATHETIC, Dimension.PERFORMANCE),
+            ("putamen",          PutamenService,          ServicePosition.T7,  Polarity.SYMPATHETIC,     Dimension.PERFORMANCE),
+            ("globus_pallidus",  GlobusPallidusService,   ServicePosition.P5,  Polarity.SOMATIC,         Dimension.PERFORMANCE),
+            ("substantia_nigra", SubstantiaNigraService,  ServicePosition.O4,  Polarity.SYMPATHETIC,     Dimension.PERFORMANCE),
+        ]
+        for key, cls, pos, pol, dim in specs:
+            svc = cls(ServiceConfig(key, Triad.SOMATIC, pos, pol, dim))
+            await svc.initialize()
+            self.coordinator.register_service(svc)
+            self.services[key] = svc
+
+    async def _init_autonomic_triad(self) -> None:
+        specs = [
+            ("hypothalamus",       HypothalamusService,       ServicePosition.M1,  Polarity.PARASYMPATHETIC, Dimension.PERFORMANCE),
+            ("hippocampus",        HippocampusService,         ServicePosition.S8,  Polarity.PARASYMPATHETIC, Dimension.PERFORMANCE),
+            ("amygdala",           AmygdalaService,            ServicePosition.PD2, Polarity.SYMPATHETIC,     Dimension.PERFORMANCE),
+            ("brainstem",          BrainstemService,           ServicePosition.T7,  Polarity.SYMPATHETIC,     Dimension.PERFORMANCE),
+            ("insula",             InsulaService,              ServicePosition.P5,  Polarity.SOMATIC,         Dimension.PERFORMANCE),
+            ("cingulate_autonomic", CingulateAutonomicService, ServicePosition.O4,  Polarity.PARASYMPATHETIC, Dimension.PERFORMANCE),
+        ]
+        for key, cls, pos, pol, dim in specs:
+            svc = cls(ServiceConfig(key, Triad.AUTONOMIC, pos, pol, dim))
+            await svc.initialize()
+            self.coordinator.register_service(svc)
+            self.services[key] = svc
+
+    # ── Cognitive Pipeline ────────────────────────────────────────────────────
+
     async def process_cognitive_task(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a cognitive task through the neural system."""
-        # Create sensory input message
-        sensory_msg = create_message('SENSORY_INPUT', task_input, 'external')
-        
-        # Process through thalamus (sensory relay)
-        relayed_msg = await self.services['thalamus'].process(sensory_msg)
+        """
+        Process a cognitive task through the full neural pipeline.
+        Pipeline: thalamus → pfc → acc → parietal → motor → striatum
+        Parallel: hypothalamus, hippocampus, amygdala monitor throughout.
+        """
+        sm_state = self.state_machine.step()
+        sensory_msg = create_message("SENSORY_INPUT", task_input, "external")
+
+        # ── Main pipeline ──────────────────────────────────────────────────
+        relayed_msg  = await self.services["thalamus"].process(sensory_msg)
         if not relayed_msg:
-            return {'error': 'Thalamus processing failed'}
-        
-        # Process through prefrontal cortex (creative ideation)
-        ideas_msg = await self.services['pfc'].process(relayed_msg)
+            return {"error": "Thalamus processing failed"}
+
+        ideas_msg    = await self.services["pfc"].process(relayed_msg)
         if not ideas_msg:
-            return {'error': 'PFC processing failed'}
-        
-        # Process through anterior cingulate (executive coordination)
-        coord_msg = await self.services['acc'].process(ideas_msg)
+            return {"error": "PFC processing failed"}
+
+        coord_msg    = await self.services["acc"].process(ideas_msg)
         if not coord_msg:
-            return {'error': 'ACC processing failed'}
-        
-        # Process through parietal cortex (analytical processing)
-        analysis_msg = await self.services['parietal'].process(coord_msg)
+            return {"error": "ACC processing failed"}
+
+        analysis_msg = await self.services["parietal"].process(coord_msg)
         if not analysis_msg:
-            return {'error': 'Parietal processing failed'}
-        
-        # Process through motor cortex (action planning)
-        motor_msg = await self.services['motor'].process(analysis_msg)
+            return {"error": "Parietal processing failed"}
+
+        motor_msg    = await self.services["motor"].process(analysis_msg)
         if not motor_msg:
-            return {'error': 'Motor cortex processing failed'}
-        
-        # Process through striatum (action selection)
-        action_msg = await self.services['striatum'].process(motor_msg)
-        
-        # Monitor homeostatic state
-        homeo_msg = await self.services['hypothalamus'].process(sensory_msg)
-        
-        # Update memory
+            return {"error": "Motor cortex processing failed"}
+
+        action_msg   = await self.services["striatum"].process(motor_msg)
+
+        # ── Extended somatic path ──────────────────────────────────────────
         if action_msg:
-            memory_msg = await self.services['hippocampus'].process(action_msg)
-        else:
-            memory_msg = None
-        
+            caudate_msg = await self.services["caudate"].process(action_msg)
+            if caudate_msg:
+                putamen_msg = await self.services["putamen"].process(caudate_msg)
+                if putamen_msg:
+                    gp_msg = await self.services["globus_pallidus"].process(putamen_msg)
+                    if gp_msg:
+                        await self.services["substantia_nigra"].process(gp_msg)
+
+        # ── Autonomic parallel processes ───────────────────────────────────
+        homeo_msg   = await self.services["hypothalamus"].process(sensory_msg)
+        memory_msg  = await self.services["hippocampus"].process(action_msg or sensory_msg)
+        emo_msg     = await self.services["amygdala"].process(sensory_msg)
+        arousal_msg = None
+        if emo_msg:
+            arousal_msg = await self.services["brainstem"].process(emo_msg)
+        intero_msg  = None
+        if emo_msg:
+            intero_msg = await self.services["insula"].process(emo_msg)
+        viscero_msg = None
+        if intero_msg:
+            viscero_msg = await self.services["cingulate_autonomic"].process(intero_msg)
+
+        # ── Global Workspace competition ───────────────────────────────────
+        candidates = []
+        for key, svc in self.services.items():
+            state = self.get_triad_state(svc.config.triad)
+            rate = state.get(key, {}).get("firing_rate", 0.0)
+            candidates.append(Representation(source=key, content=key, salience=rate))
+        broadcast = self.global_workspace.compete_for_access(candidates)
+
+        # ── Triple network update ──────────────────────────────────────────
+        avg_salience = float(np.mean([c.salience for c in candidates])) if candidates else 0.3
+        network_state = self.triple_network.switch_networks(avg_salience)
+
         return {
-            'action': action_msg.payload if action_msg else None,
-            'homeostasis': homeo_msg.payload if homeo_msg else None,
-            'memory': memory_msg.payload if memory_msg else None
+            "action":        action_msg.payload   if action_msg   else None,
+            "homeostasis":   homeo_msg.payload     if homeo_msg    else None,
+            "memory":        memory_msg.payload    if memory_msg   else None,
+            "emotion":       emo_msg.payload       if emo_msg      else None,
+            "arousal":       arousal_msg.payload   if arousal_msg  else None,
+            "interoception": intero_msg.payload    if intero_msg   else None,
+            "visceromotor":  viscero_msg.payload   if viscero_msg  else None,
+            "state_machine": sm_state,
+            "network_mode":  network_state["mode"],
+            "broadcast":     broadcast.representation.source if broadcast else None,
         }
 
+    # ── Triad State Accessors ─────────────────────────────────────────────────
 
-# ============================================================================
+    def get_triad_services(self, triad: Triad) -> Dict[str, BaseCosmosService]:
+        return {k: v for k, v in self.services.items() if v.config.triad == triad}
+
+    def get_triad_state(self, triad: Triad) -> Dict[str, Any]:
+        """Return firing rates and activity for all services in a triad."""
+        state = {}
+        for key, svc in self.get_triad_services(triad).items():
+            if hasattr(svc, "population"):
+                state[key] = {
+                    "firing_rate": svc.population.get_firing_rate(),
+                    "n_neurons":   svc.population.n_neurons,
+                    "neuron_type": svc.population.neuron_type.value,
+                }
+            elif hasattr(svc, "bla"):  # Amygdala
+                bla_rate = svc.bla.get_firing_rate()
+                cea_rate = svc.cea.get_firing_rate()
+                state[key] = {
+                    "bla_rate": bla_rate,
+                    "cea_rate": cea_rate,
+                    "firing_rate": (bla_rate + cea_rate) / 2,
+                }
+            elif hasattr(svc, "pag"):  # Brainstem
+                pag_rate = svc.pag.get_firing_rate()
+                lc_rate  = svc.lc.get_firing_rate()
+                nts_rate = svc.nts.get_firing_rate()
+                state[key] = {
+                    "pag_rate": pag_rate,
+                    "lc_rate":  lc_rate,
+                    "nts_rate": nts_rate,
+                    "firing_rate": lc_rate,
+                }
+            elif hasattr(svc, "anterior"):  # Insula
+                anterior_rate = svc.anterior.get_firing_rate()
+                posterior_rate = svc.posterior.get_firing_rate()
+                state[key] = {
+                    "anterior_rate": anterior_rate,
+                    "posterior_rate": posterior_rate,
+                    "firing_rate": (anterior_rate + posterior_rate) / 2,
+                }
+        return state
+
+    def get_cerebral_state(self)  -> Dict[str, Any]: return self.get_triad_state(Triad.CEREBRAL)
+    def get_somatic_state(self)   -> Dict[str, Any]: return self.get_triad_state(Triad.SOMATIC)
+    def get_autonomic_state(self) -> Dict[str, Any]: return self.get_triad_state(Triad.AUTONOMIC)
+
+    def get_service_firing_rates(self) -> Dict[str, float]:
+        rates = {}
+        for key, svc in self.services.items():
+            triad_state = self.get_triad_state(svc.config.triad)
+            if key in triad_state:
+                rates[key] = triad_state[key].get("firing_rate", 0.0)
+        return rates
+
+    async def run_autognosis_cycle(self) -> Dict[str, Any]:
+        """Run a full self-awareness cycle across the system."""
+        rates = self.get_service_firing_rates()
+        return await self.autognosis.run_autognosis_cycle(rates)
+
+    async def shutdown(self) -> None:
+        for svc in self.services.values():
+            await svc.shutdown()
+
+
+# =============================================================================
 # EXAMPLE USAGE
-# ============================================================================
+# =============================================================================
 
 if __name__ == "__main__":
-    import asyncio
-    
     setup_logging("INFO")
-    
     print("=== COSYS-XNN: Cognitive Neural Network Demo ===\n")
-    
-    # Create system
+
     system = CognitiveNeuralSystem()
     asyncio.run(system.initialize())
-    
-    # Process cognitive task
+
     print("\n--- Processing cognitive task ---")
-    task = {
-        'context': 'problem-solving',
-        'complexity': 'high',
-        'sensory_input': np.random.randn(10)
-    }
-    
+    task = {"context": "problem-solving", "complexity": "high"}
     result = asyncio.run(system.process_cognitive_task(task))
-    
+
     print("\n=== Results ===")
-    if 'error' in result:
-        print(f"Error: {result['error']}")
-    else:
-        if result.get('action'):
-            print(f"Action: {result['action']['selected_action']}")
-            print(f"Action Value: {result['action']['action_value']:.2f}")
-        if result.get('homeostasis'):
-            print(f"Arousal: {result['homeostasis']['arousal_level']:.2f}")
-        if result.get('memory'):
-            print(f"Memory Strength: {result['memory']['memory_strength']:.2f}")
-    
+    if result.get("action"):
+        print(f"Action:       {result['action'].get('selected_action')}")
+    if result.get("homeostasis"):
+        print(f"Arousal:      {result['homeostasis'].get('arousal_level', 0):.3f}")
+    if result.get("memory"):
+        print(f"Memory:       {result['memory'].get('memory_strength', 0):.3f}")
+    if result.get("emotion"):
+        print(f"Valence:      {result['emotion'].get('emotional_valence', 0):.3f}")
+    print(f"Network mode: {result.get('network_mode')}")
+    print(f"SM step:      {result.get('state_machine', {}).get('t', 0)}")
+
+    print("\n=== Triad States ===")
+    print("Cerebral: ", {k: f"{v.get('firing_rate', 0):.3f}" for k, v in system.get_cerebral_state().items()})
+    print("Somatic:  ", {k: f"{v.get('firing_rate', 0):.3f}" for k, v in system.get_somatic_state().items()})
+    print("Autonomic:", {
+        k: f"{v.get('firing_rate', 0):.3f}" if "firing_rate" in v else str(v)
+        for k, v in system.get_autonomic_state().items()
+    })
+
+    print("\n--- Running autognosis cycle ---")
+    autognosis_result = asyncio.run(system.run_autognosis_cycle())
+    print(f"Insights: {len(autognosis_result['insights'])}")
+    for i in autognosis_result["insights"]:
+        print(f"  - {i['insight']}")
+
     print("\n✓ COSYS-XNN demonstration complete")
